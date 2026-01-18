@@ -399,9 +399,10 @@ ModuleMenu () {
 		echo
 		echo "1 : DVAP Dongle"
 		echo "2 : DVRPTR V1"
-		echo "3 : ICOM Terminal and Access Point Mode"
-		echo "4 : MMDVM Modem (like DVMega or ZUMspot) D-Star ONLY!"
-		echo "5 : MMDVMHost or DStarRepeater Sytem"
+		echo "3 : ICOM Terminal and Access Point Mode (USB)"
+		echo "4 : ICOM Terminal and Access Point Mode (Bluetooth)"
+		echo "5 : MMDVM Modem (like DVMega or ZUMspot) D-Star ONLY!"
+		echo "6 : MMDVMHost or DStarRepeater Sytem"
 		echo
 		echo "    Anything else will return without selecting"
 		echo
@@ -410,8 +411,9 @@ ModuleMenu () {
 		if   [[ "$key" == 1 ]]; then eval ${mod}=dvap
 		elif [[ "$key" == 2 ]]; then eval ${mod}=dvrptr
 		elif [[ "$key" == 3 ]]; then eval ${mod}=itap
-		elif [[ "$key" == 4 ]]; then eval ${mod}=mmdvmmodem
-		elif [[ "$key" == 5 ]]; then eval ${mod}=mmdvmhost
+		elif [[ "$key" == 4 ]]; then eval ${mod}=bt
+		elif [[ "$key" == 5 ]]; then eval ${mod}=mmdvmmodem
+		elif [[ "$key" == 6 ]]; then eval ${mod}=mmdvmhost
 		else return
 		fi
 	fi
@@ -459,6 +461,10 @@ ModuleMenu () {
 			echo -n "fr : Frequency in MHz                             = "; EvaluateVar {${mod},itap}_frequency
 			echo -n "dv : USB device path                              = "; EvaluateVar {${mod},itap}_device
 			echo -n "ap : Set to true if using Access Point Mode       = "; EvaluateVar {${mod},itap}_ap_mode
+		elif [[ "${!mod}" == 'bt' ]]; then
+			echo -n "fr : Frequency in MHz                             = "; EvaluateVar {${mod},bt}_frequency
+			echo -n "dv : Bluetooth device path (/dev/rfcommX)         = "; EvaluateVar {${mod},bt}_device
+			echo -n "ap : Set to true if using Access Point Mode       = "; EvaluateVar {${mod},bt}_ap_mode
 		elif [[ "${!mod}" == 'mmdvmhost' ]]; then
 			echo -n "dr : System is DStarRepeater, and _NOT_ MMDVMHost = "; EvaluateVar {${mod},mmdvmhost}_is_dstarrepeater
 			echo -n "ip : bound IP address for communication to modem  = "; EvaluateVar {${mod},mmdvmhost}_internal_ip
@@ -632,7 +638,7 @@ WriteCFGFile () {
 				q=${p}_rqst_count;    [ -z ${!q+x} ] || echo "${q}=${!q}"   >> $outFile
 				q=${p}_tx_invert;     [ -z ${!q+x} ] || echo "${q}=${!q}"   >> $outFile
 				q=${p}_rx_invert;     [ -z ${!q+x} ] || echo "${q}=${!q}"   >> $outFile
-			elif [[ "${!p}" == "itap" ]]; then
+			elif [[ "${!p}" == "itap" ]] || [[ "${!p}" == "bt" ]]; then
 				q=${p}_frequency; [ -z ${!q+x} ] || echo "${q}=${!q}"   >> $outFile
 				q=${p}_device;    [ -z ${!q+x} ] || echo "${q}=${!q}"   >> $outFile
 				q=${p}_ap_mode;   [ -z ${!q+x} ] || echo "${q}=${!q}"   >> $outFile

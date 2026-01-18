@@ -101,7 +101,7 @@ if( ($now-$lastRunTime) > 8 )
      # Only proccess if defined in show list
      if( in_array("PS", $showlist) ) {
           $jsonArray = [];
-          $lines = explode("\n", `ps -eo user,pid,pcpu,size,cmd | grep -e qngateway -e qnlink -e qndtmf -e qndvap -e qnitap -e qnrelay -e qndvrptr -e qnmodem -e MMDVMHost | grep -v grep`);
+          $lines = explode("\n", `ps -eo user,pid,pcpu,size,cmd | grep -e qngateway -e qnlink -e qndtmf -e qndvap -e qnitap -e qnbt -e qnrelay -e qndvrptr -e qnmodem -e MMDVMHost | grep -v grep`);
           foreach ($lines as $line) {
                $items = preg_split ('/\s+/', $line, 5);
                if( isset( $items[1] ) ) {

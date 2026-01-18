@@ -41,7 +41,7 @@ SRCS = $(wildcard *.cpp) $(wildcard $(IRC)/*.cpp)
 OBJS = $(SRCS:.cpp=.o)
 DEPS = $(SRCS:.cpp=.d)
 
-ALL_PROGRAMS=qngateway qnlink qnremote qnvoice qnrelay qndvap qndvrptr qnitap qnmodem
+ALL_PROGRAMS=qngateway qnlink qnremote qnvoice qnrelay qndvap qndvrptr qnitap qnbt qnmodem
 BASE_PROGRAMS=qngateway qnlink qnremote qnvoice
 
 all    : $(ALL_PROGRAMS)
@@ -50,6 +50,7 @@ relay  : qnrelay
 dvap   : qndvap
 dvrptr : qndvrptr
 itap   : qnitap
+bt     : qnbt
 modem  : qnmodem
 
 qngateway : QnetGateway.o aprs.o UnixDgramSocket.o TCPReaderWriterClient.o QnetConfigure.o QnetDB.o CacheManager.o DStarDecode.o Location.o $(IRCOBJS)
@@ -62,6 +63,9 @@ qnrelay : QnetRelay.o UnixDgramSocket.o QnetConfigure.o
 	g++ -o $@ $^ $(LDFLAGS)
 
 qnitap : QnetITAP.o UnixDgramSocket.o QnetConfigure.o
+	g++ -o $@ $^ $(LDFLAGS)
+
+qnbt : QnetBT.o UnixDgramSocket.o QnetConfigure.o
 	g++ -o $@ $^ $(LDFLAGS)
 
 qnmodem : QnetModem.o UnixDgramSocket.o QnetConfigure.o
@@ -169,6 +173,14 @@ installitap : qnitap
 	systemctl enable qnitap$(MODULE).service
 	systemctl daemon-reload
 	systemctl start qnitap$(MODULE).service
+
+installbt : qnbt
+	######### QnetBT #########
+	/bin/ln -f qnbt $(BINDIR)/qnbt$(MODULE)
+	sed -e "s/XXX/qnbt$(MODULE)/" system/qnbt.service > $(SYSDIR)/qnbt$(MODULE).service
+	systemctl enable qnbt$(MODULE).service
+	systemctl daemon-reload
+	systemctl start qnbt$(MODULE).service
 
 installmodem : qnmodem
 	######### QnetModem #########
@@ -293,6 +305,14 @@ uninstallitap :
 	systemctl disable qnitap$(MODULE).service
 	/bin/rm -f $(SYSDIR)/qnitap$(MODULE).service
 	/bin/rm -f $(BINDIR)/qnitap$(MODULE)
+	systemctl daemon-reload
+
+uninstallbt :
+	######### QnetBT #########
+	systemctl stop qnbt$(MODULE).service
+	systemctl disable qnbt$(MODULE).service
+	/bin/rm -f $(SYSDIR)/qnbt$(MODULE).service
+	/bin/rm -f $(BINDIR)/qnbt$(MODULE)
 	systemctl daemon-reload
 
 uninstalldvap :

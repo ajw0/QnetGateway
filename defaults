@@ -140,6 +140,14 @@ itap_ap_mode=false         # Set to true if you are operating in Access Point Mo
 
 ##########################################################################################################################
 #
+# BT - Special parameters when: module_x='bt'
+#
+bt_device='/dev/rfcomm0' # where the Bluetooth rfcomm device shows up
+bt_frequency=0           # in MHz, not required for either mode, for AP mode, the simplex frequency is set on your radio
+bt_ap_mode=false         # Set to true if you are operating in Access Point Mode
+
+##########################################################################################################################
+#
 # DVAP - Special parameters when: module.x='dvap'
 #
 module_x_frequency=0  # in MHz, you must specify an operational frequency for the DVAP

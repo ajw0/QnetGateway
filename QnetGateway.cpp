@@ -252,6 +252,7 @@ bool CQnetGateway::ReadConfig(const std::string &cfgFile)
 			else if (0 == type.compare("mmdvmhost"))  { Rptr.mod[m].package_version.assign(GW_VERSION+".Relay"); }
 			else if (0 == type.compare("mmdvmmodem")) { Rptr.mod[m].package_version.assign(GW_VERSION+".Modem"); }
 			else if (0 == type.compare("itap"))       { Rptr.mod[m].package_version.assign(GW_VERSION+".ITAP"); }
+			else if (0 == type.compare("bt"))         { Rptr.mod[m].package_version.assign(GW_VERSION+".BT"); }
 			else if (0 == type.compare("thumbdv"))    { Rptr.mod[m].package_version.assign(GW_VERSION+".ThumbDV"); }
 			else
 			{

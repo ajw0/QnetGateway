@@ -45,7 +45,7 @@ bool read_config(const char *cfgFile)
 		if (cfg.KeyExists(path))
 		{
 			cfg.GetValue(path, "", type, 1, 16);
-			if (strcasecmp(type.c_str(), "dvap") && strcasecmp(type.c_str(), "dvrptr") && strcasecmp(type.c_str(), "mmdvm") && strcasecmp(type.c_str(), "itap"))
+			if (strcasecmp(type.c_str(), "dvap") && strcasecmp(type.c_str(), "dvrptr") && strcasecmp(type.c_str(), "mmdvm") && strcasecmp(type.c_str(), "itap") && strcasecmp(type.c_str(), "bt"))
 			{
 				printf("module type '%s' is invalid\n", type.c_str());
 				return true;

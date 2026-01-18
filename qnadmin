@@ -94,6 +94,12 @@ InstallSystem () {
 		fi
 		InstallComponent "$1" itap $nitap ${aitap[*]}
 	fi
+	if [ $nbt -gt 0 ]; then
+		if [ -z ${1} ]; then
+			make qnbt -j$n
+		fi
+		InstallComponent "$1" bt $nbt ${abt[*]}
+	fi
 	if [ $nmmdvm -gt 0 ]; then
 		if [ -z ${1} ]; then
 			make qnrelay -j$n
@@ -262,7 +268,7 @@ Header () {
 	if [ ${count} -gt 3 ]; then
 		echo
 		echo "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND"
-		ps -aux | grep -e qngateway -e qnlink -e qndtmf -e qndvap -e qnitap -e qnrelay -e qndvrptr -e qnmodem -e MMDVMHost -e YSFGateway -e DMRGateway -e APRSGateway | grep -v grep
+		ps -aux | grep -e qngateway -e qnlink -e qndtmf -e qndvap -e qnitap -e qnbt -e qnrelay -e qndvrptr -e qnmodem -e MMDVMHost -e YSFGateway -e DMRGateway -e APRSGateway | grep -v grep
 	fi
 	echo
 }
@@ -759,6 +765,7 @@ fi
 ndvap=0
 ndvrptr=0
 nitap=0
+nbt=0
 nmmdvm=0
 nmodem=0
 
@@ -775,6 +782,9 @@ for m in a b c ; do
 	elif [[ "$type" == 'itap' ]]; then
 		aitap[${nitap}]=${m}
 		nitap=$((nitap + 1))
+	elif [[ "$type" == 'bt' ]]; then
+		abt[${nbt}]=${m}
+		nbt=$((nbt + 1))
 	elif [[ "$type" == 'mmdvmhost' ]]; then
 		ammdvm[${nmmdvm}]=${m}
 		nmmdvm=$((nmmdvm + 1))
@@ -784,7 +794,7 @@ for m in a b c ; do
 	fi
 done
 
-MODULE_COUNT=$((ndvap + ndvrptr + nitap + nmmdvm + nmodem))
+MODULE_COUNT=$((ndvap + ndvrptr + nitap + nbt + nmmdvm + nmodem))
 
 while [[ "$ans" != q* ]]; do
 	clear
