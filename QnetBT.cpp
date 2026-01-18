@@ -20,23 +20,18 @@
  */
 
 #include <algorithm>
-#include <exception>
 #include <cstdio>
 #include <cctype>
 #include <cstring>
 #include <csignal>
-#include <ctime>
 #include <cstdlib>
-#include <netdb.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <termios.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <errno.h>
 #include <thread>
 #include <chrono>
@@ -48,6 +43,28 @@
 #include "Timer.h"
 
 #define BT_VERSION "QnetBT-60117"
+
+namespace
+{
+	constexpr unsigned int kHeaderLength = 41U;
+	constexpr unsigned int kVoiceLength = 16U;
+	constexpr unsigned int kVoiceBatchLength = 56U;
+	constexpr unsigned int kVoiceBatchHeaderLength = 4U;
+	constexpr unsigned int kMaxPacketLength = 100U;
+
+	unsigned char ModuleToFlag(const char module)
+	{
+		switch (module)
+		{
+		case 'B':
+			return 0x1U;
+		case 'C':
+			return 0x2U;
+		default:
+			return 0x3U;
+		}
+	}
+}
 
 bool CQnetBT::Initialize(const std::string &cfgfile)
 {
@@ -119,11 +136,6 @@ int CQnetBT::OpenBT()
 void CQnetBT::DumpPacket(const char *title, const unsigned char *buf)
 {
 	printf("%s: ", title);
-	//if (buf[0] > 41)
-	//{
-	//	printf("UNKNOWN: length=%u\n", (unsigned)buf[0]);
-	//	return;
-	//}
 	SITAP itap;
 	memcpy(&itap, buf, std::min((size_t)buf[0], sizeof(SITAP)));
 	switch (itap.type)
@@ -135,8 +147,13 @@ void CQnetBT::DumpPacket(const char *title, const unsigned char *buf)
 		case 0x20U:
 			printf("Header ur=%8.8s r1=%8.8s r2=%8.8s my=%8.8s/%4.4s", itap.header.ur, itap.header.r1, itap.header.r2, itap.header.my, itap.header.nm);
 			break;
-		case 0x13U: // bt data??
-		case 0x12U: // data
+		case 0x13U:
+			printf("Data batch count=%u frames=%u", itap.voice_bt.counter, itap.voice_bt.count);
+			break;
+		case 0x23U:
+			printf("Data acknowledgement seq=%02u code=%02u", buf[2], buf[3]);
+			break;
+		case 0x12U:
 		case 0x22U:
 			printf("Data count=%u  seq=%u f=%02u%02u%02u a=%02u%02u%02u%02u%02u%02u%02u%02u%02u t=%02u%02u%02u", itap.voice.counter, itap.voice.frame.sequence, itap.header.flag[0], itap.header.flag[1], itap.header.flag[2], itap.voice.frame.ambe[0], itap.voice.frame.ambe[1], itap.voice.frame.ambe[2], itap.voice.frame.ambe[3], itap.voice.frame.ambe[4], itap.voice.frame.ambe[5], itap.voice.frame.ambe[6], itap.voice.frame.ambe[7], itap.voice.frame.ambe[8], itap.voice.frame.text[0], itap.voice.frame.text[1], itap.voice.frame.text[2]);
 			break;
@@ -144,11 +161,13 @@ void CQnetBT::DumpPacket(const char *title, const unsigned char *buf)
 		case 0x21U:
 			printf("Header acknowledgement code=%02u", itap.header.flag[0]);
 			break;
-		case 0x23U:
-			printf("Data acknowledgement seq=%02u code=%02u", itap.header.flag[0], itap.header.flag[1]);
-			break;
 		default:
-			printf("UNKNOWN packet buf[0] = 0x%02u", buf[0]);
+			{
+				const unsigned int length = std::min((unsigned int)buf[0], kMaxPacketLength);
+				printf("UNKNOWN packet len=0x%02x type=0x%02x data=", buf[0], buf[1]);
+				for (unsigned int i = 0; i < length; i++)
+					printf("%02x", buf[i]);
+			}
 			break;
 	}
 	printf("\n");
@@ -175,7 +194,7 @@ REPLY_TYPE CQnetBT::GetBTData(unsigned char *buf)
 
 	unsigned int length = buf[0U];
 
-	if (length >= 100U)
+	if (length >= kMaxPacketLength)
 	{
 		printf("Invalid data received from the Icom radio, length=%d\n", length);
 		return RT_ERROR;
@@ -203,13 +222,13 @@ REPLY_TYPE CQnetBT::GetBTData(unsigned char *buf)
 		case 0x10U:
 			return RT_HEADER;
 		case 0x12U:
-			return RT_DATA;
+			return RT_DATA_SINGLE;
 		case 0x13U:
 			return RT_DATA_BT;
-		case 0x21U:
-			return RT_HEADER_ACK;
 		case 0x23U:
 			return RT_DATA_ACK;
+		case 0x21U:
+			return RT_HEADER_ACK;
 		default:
 			return RT_UNKNOWN;
 	}
@@ -221,16 +240,26 @@ void CQnetBT::Run()
 	bool initialized = false;
 	bool alive = true;
 	acknowledged = true;
+	send_error_logged = false;
 	CTimer ackTimer;
 	CTimer lastdataTimer;
 	CTimer pingTimer;
 	double pingtime = 0.001;
-	const double ackwait = AP_MODE ? 0.4 : 0.06;
+	const double ackwait = 0.4;
+
 	int ug2m = FromGate.GetFD();
 	printf("gate2modem=%d, serial=%d\n", ug2m, serfd);
 
 	while (keep_running)
 	{
+		if (serfd < 0)
+		{
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+			serfd = OpenBT();
+			if (serfd < 0)
+				continue;
+		}
+
 		fd_set readfds;
 		FD_ZERO(&readfds);
 		FD_SET(serfd, &readfds);
@@ -246,14 +275,16 @@ void CQnetBT::Run()
 		int ret = select(maxfs+1, &readfds, NULL, NULL, &tv);
 		if (ret < 0)
 		{
+			if (errno == EINTR)
+				continue;
 			printf("ERROR: Run: select returned err=%d, %s\n", errno, strerror(errno));
 			break;
 		}
 
 		// check for a dead or disconnected radio
-		if (30.0 < lastdataTimer.time())
+		if (10.0 < lastdataTimer.time())
 		{
-			printf("no activity from radio for 30 sec. Restarting...\n");
+			printf("no activity from radio for 10 sec. Restarting...\n");
 			alive = false;
 		}
 
@@ -262,7 +293,8 @@ void CQnetBT::Run()
 			if (poll_counter < 18 )
 			{
 				const unsigned char poll[2] = { 0xffu, 0xffu };
-				SendToIcom(poll);
+				if (!SendToIcom(poll))
+					alive = false;
 				if (poll_counter++ == 17)
 					pingtime = 1.0;
 			}
@@ -271,11 +303,13 @@ void CQnetBT::Run()
 				const unsigned char ping[2] = { 0x02u, 0x02u };
 				if (SendToIcom(ping))
 					lastdataTimer.start();	// Reset timer on successful ping (BT doesn't send PONG)
+				else
+					alive = false;
 			}
 			pingTimer.start();
 		}
 
-		unsigned char buf[100];
+		unsigned char buf[kMaxPacketLength];
 		static int timeout_count = 0;  // Track consecutive RT_TIMEOUT responses
 
 		if (keep_running && FD_ISSET(serfd, &readfds))  	// there is something to read from the Icom!
@@ -301,7 +335,7 @@ void CQnetBT::Run()
 						keep_running = false;
 					lastdataTimer.start();
 					break;
-				case RT_DATA:
+				case RT_DATA_SINGLE:
 					{
 						unsigned char ack_voice[4] = { 0x04U, 0x13U, 0x0U, 0x0U };
 						ack_voice[2] = buf[2];
@@ -313,8 +347,7 @@ void CQnetBT::Run()
 					lastdataTimer.start();
 					break;
 				case RT_DATA_BT:
-					// TODO: how to ACK bluetooth packet? is it even
-					// needed/desired?
+					// TODO: No evidence radio expects ACK for 0x13 batched RX; avoid speculative ACKs unless spec confirms.
 					if (ProcessBT(buf))
 						keep_running = false;
 					lastdataTimer.start();
@@ -331,17 +364,16 @@ void CQnetBT::Run()
 						else
 							printf("Icom Radio is connected.\n");
 						initialized = true;
+						send_error_logged = false;
 					}
-					else if (LOG_DEBUG)
-					{
-						printf("Received PONG from radio\n");
-					}
+
 					lastdataTimer.start();
 					break;
 				case RT_HEADER_ACK:
 					if (acknowledged)
 					{
-						fprintf(stderr, "ERROR: Header already acknowledged!\n");
+						if (LOG_DEBUG)
+							fprintf(stderr, "DEBUG: Header already acknowledged!\n");
 					}
 					else
 					{
@@ -351,15 +383,8 @@ void CQnetBT::Run()
 					lastdataTimer.start();
 					break;
 				case RT_DATA_ACK:
-					if (acknowledged)
-					{
-						fprintf(stderr, "ERROR: voice frame %d already acknowledged!\n", (int)buf[2]);
-					}
-					else
-					{
-						if (0x0U == buf[3])
-							acknowledged = true;
-					}
+					if (!acknowledged && (0x0U == buf[3]))
+						acknowledged = true;
 					lastdataTimer.start();
 					break;
 				case RT_TIMEOUT:	// nothing or 0xff
@@ -379,7 +404,7 @@ void CQnetBT::Run()
 
 		if (keep_running && FD_ISSET(ug2m, &readfds))
 		{
-			ssize_t len = FromGate.Read(buf, 100);
+			ssize_t len = FromGate.Read(buf, kMaxPacketLength);
 
 			if (len < 0)
 			{
@@ -407,14 +432,21 @@ void CQnetBT::Run()
 						CFrame frame = queue.front();
 						queue.pop();
 						if (alive) {
-							SendToIcom(frame.data());
-							// Add small delay for Bluetooth to process packet
-							std::this_thread::sleep_for(std::chrono::microseconds(500));
-							ackTimer.start();
-							// TODO: radio does not ACK over BT, perhaps
-							// because we are sending one-by-one instead
-							// of by-fours.
-							acknowledged = true; // = false;
+							if (!SendToIcom(frame.data()))
+							{
+								alive = false;
+							}
+							else
+							{
+								if (LOG_DEBUG)
+									DumpPacket("TX", frame.data());
+								// Add small delay for Bluetooth to process packet
+								std::this_thread::sleep_for(std::chrono::microseconds(500));
+								ackTimer.start();
+								// TODO: Radio sends 0x23 ACKs, but voice gating destabilizes BT; keep header-only ACK unless spec changes.
+								const unsigned char tx_type = frame.data()[1];
+								acknowledged = (tx_type != 0x20U);
+							}
 						}
 					}
 				}
@@ -431,24 +463,15 @@ void CQnetBT::Run()
 		if (! alive)
 		{
 			close(serfd);
+			serfd = -1;
 			poll_counter = 0;
 			pingtime = 0.001;
 			initialized = false;
 			alive = acknowledged = true;
 			lastdataTimer.start();
 			pingTimer.start();
-			// Wait before retrying to avoid CPU spin when device is persistently unavailable
-			std::this_thread::sleep_for(std::chrono::seconds(2));
-			serfd = OpenBT();
-			if (serfd < 0)
-			{
-				keep_running = false;
-			}
-			else
-			{
-				while (! queue.empty())
-					queue.pop();
-			}
+			while (! queue.empty())
+				queue.pop();
 		}
 	}
 }
@@ -472,7 +495,11 @@ bool CQnetBT::SendToIcom(const unsigned char *buf)
 		{
 			if (EAGAIN != errno)
 			{
-				printf("Error %d writing to %s: %s\n", errno, BT_DEVICE.c_str(), strerror(errno));
+				if (!send_error_logged)
+				{
+					printf("Error %d writing to %s: %s\n", errno, BT_DEVICE.c_str(), strerror(errno));
+					send_error_logged = true;
+				}
 				return false;
 			}
 		}
@@ -489,7 +516,11 @@ bool CQnetBT::SendToIcom(const unsigned char *buf)
 		{
 			if (EAGAIN != errno)
 			{
-				printf("Error %d writing to %s: %s\n", errno, BT_DEVICE.c_str(), strerror(errno));
+				if (!send_error_logged)
+				{
+					printf("Error %d writing to %s: %s\n", errno, BT_DEVICE.c_str(), strerror(errno));
+					send_error_logged = true;
+				}
 				return false;
 			}
 		}
@@ -506,11 +537,12 @@ bool CQnetBT::ProcessGateway(const int len, const unsigned char *raw)
 		memcpy(dsvt.title, raw, len);	// transfer raw data to SDSVT struct
 
 		SITAP itap;	// destination
-		if (56 == len)  			// write a Header packet
+		const bool is_header = (56 == len);
+		if (is_header)
 		{
 			counter = 0;
-			itap.length = 41U;
-			itap.type = 0x20;
+			itap.length = kHeaderLength;
+			itap.type = 0x20U;
 			memcpy(itap.header.flag, dsvt.hdr.flag, 3);
 			if (RPTR_MOD == dsvt.hdr.rpt2[7])
 			{
@@ -526,17 +558,16 @@ bool CQnetBT::ProcessGateway(const int len, const unsigned char *raw)
 			memcpy(itap.header.my, dsvt.hdr.mycall, 8);
 			memcpy(itap.header.nm, dsvt.hdr.sfx,    4);
 			if (LOG_QSO)
-				printf("Queued ITAP to %s ur=%.8s r1=%.8s r2=%.8s my=%.8s/%.4s\n", BT_DEVICE.c_str(), itap.header.ur, itap.header.r1, itap.header.r2, itap.header.my, itap.header.nm);
+				printf("Queued BT to %s ur=%.8s r1=%.8s r2=%.8s my=%.8s/%.4s\n", BT_DEVICE.c_str(), itap.header.ur, itap.header.r1, itap.header.r2, itap.header.my, itap.header.nm);
 		}
-		else  	// write an AMBE packet
+		else
 		{
-			itap.length = 16U;
-			itap.type = 0x22U; // TODO: what is used to write BT groups
-			// of 4?
+			itap.length = kVoiceLength;
+			itap.type = 0x22U; // TODO: Batched TX (0x23) tested (variable/fixed) with no audio; keep 0x22.
 			itap.voice.counter = counter++;
 			itap.voice.frame.sequence = dsvt.ctrl;
 			if (LOG_QSO && (dsvt.ctrl & 0x40))
-				printf("Queued ITAP end of stream\n");
+				printf("Queued BT end of stream\n");
 			if ((dsvt.ctrl & ~0x40U) > 20)
 				printf("DEBUG: ProcessGateway: unexpected voice sequence number %d\n", itap.voice.frame.sequence);
 			memcpy(itap.voice.frame.ambe, dsvt.vasd.voice, 12);
@@ -551,29 +582,72 @@ bool CQnetBT::ProcessGateway(const int len, const unsigned char *raw)
 
 bool CQnetBT::ProcessBT(const unsigned char *buf)
 {
-	static short stream_id = 0U;
+	static unsigned short stream_id = 0U;
+	const unsigned int packet_length = buf[0U];
+	const unsigned char packet_type = buf[1U];
+	const bool is_header = (packet_type == 0x10U);
+	unsigned int expected_length = 0U;
+	unsigned int batch_count = 0U;
+
+	switch (packet_type)
+	{
+		case 0x10U:
+			expected_length = kHeaderLength;
+			break;
+		case 0x12U:
+			expected_length = kVoiceLength;
+			break;
+		case 0x13U:
+			if (packet_length < kVoiceBatchHeaderLength)
+			{
+				if (LOG_DEBUG)
+					printf("DEBUG: ProcessBT: short batched packet length %u\n", packet_length);
+				return false;
+			}
+			batch_count = buf[3];
+			if (batch_count > BT_BATCH_SIZE)
+				batch_count = BT_BATCH_SIZE;
+			expected_length = kVoiceBatchHeaderLength + (batch_count * sizeof(ambe_frame));
+			break;
+		case 0x23U:
+			return false;
+		default:
+			if (LOG_DEBUG)
+				printf("DEBUG: ProcessBT: unexpected packet type 0x%02x\n", packet_type);
+			return false;
+
+	}
+
+	if (packet_length < expected_length)
+	{
+		if (LOG_DEBUG)
+			printf("DEBUG: ProcessBT: short packet length %u for type 0x%02x\n", packet_length, packet_type);
+		return false;
+	}
+
+	if (LOG_DEBUG && !is_header && packet_length != expected_length)
+		printf("DEBUG: ProcessBT: unexpected packet length %u for type 0x%02x\n", packet_length, packet_type);
+
 	SITAP itap;
-	unsigned int len = (0x10U == buf[1]) ? 41 : 16;
-	if (buf[1] == 0x13U) len = 56;
+	memcpy(&itap.length, buf, expected_length);	// transfer raw data to SITAP struct
+	if (packet_type == 0x13U)
+		itap.voice_bt.count = batch_count;
 
-	memcpy(&itap.length, buf, len);	// transfer raw data to SITAP struct
-
-	// create a stream id if this is a header
-	if (41 == len)
+	if (is_header)
 		stream_id = random.NewStreamID();
 
 	SDSVT dsvt;	// destination
 	// sets most of the params
 	memcpy(dsvt.title, "DSVT", 4);
-	dsvt.config = (len==41) ? 0x10U : 0x20U;
+	dsvt.config = is_header ? 0x10U : 0x20U;
 	memset(dsvt.flaga, 0U, 3U);
-	dsvt.id = 0x20;
-	dsvt.flagb[0] = 0x0;
-	dsvt.flagb[1] = 0x1;
-	dsvt.flagb[2] = ('B'==RPTR_MOD) ? 0x1 : (('C'==RPTR_MOD) ? 0x2 : 0x3);
+	dsvt.id = 0x20U;
+	dsvt.flagb[0] = 0x0U;
+	dsvt.flagb[1] = 0x1U;
+	dsvt.flagb[2] = ModuleToFlag(RPTR_MOD);
 	dsvt.streamid = htons(stream_id);
 
-	if (41 == len)  	// header
+	if (is_header)
 	{
 		dsvt.ctrl = 0x80;
 
@@ -620,35 +694,36 @@ bool CQnetBT::ProcessBT(const unsigned char *buf)
 		if (LOG_QSO)
 			printf("Sent DSVT to gateway, streamid=%04x ur=%.8s r1=%.8s r2=%.8s my=%.8s/%.4s\n", ntohs(dsvt.streamid), dsvt.hdr.urcall, dsvt.hdr.rpt1, dsvt.hdr.rpt2, dsvt.hdr.mycall, dsvt.hdr.sfx);
 	}
-	else if (16 == len)  	// ambe
+	else
 	{
-		dsvt.ctrl = itap.voice.frame.sequence;
-		memcpy(dsvt.vasd.voice, itap.voice.frame.ambe, 12);
-
-		if (ToGate.Write(dsvt.title, 27))
+		auto write_voice = [&](const ambe_frame &frame) -> bool
 		{
-			printf("ERROR: ProcessMMDVM: Could not write gateway voice packet\n");
-			return true;
-		}
-
-		if (LOG_QSO && (dsvt.ctrl & 0x40)) {
-			printf("Sent dsvt end of streamid=%04x\n", ntohs(dsvt.streamid));
-		}
-	}
-	else if (56 == len) // ambe-BT
-	{
-		for (int i = 0; i < itap.voice_bt.count; i++) {
-			dsvt.ctrl = itap.voice_bt.frames[i].sequence;
-			memcpy(dsvt.vasd.voice, itap.voice_bt.frames[i].ambe, 12);
+			dsvt.ctrl = frame.sequence;
+			memcpy(dsvt.vasd.voice, frame.ambe, 12);
 
 			if (ToGate.Write(dsvt.title, 27))
 			{
-				printf("ERROR: ProcessMMDVM: Could not write gateway voice packet\n");
+				printf("ERROR: ProcessBT: Could not write gateway voice packet\n");
 				return true;
 			}
-	
-			if (LOG_QSO && ((dsvt.ctrl & 0x40))) {
+
+			if (LOG_QSO && (dsvt.ctrl & 0x40))
 				printf("Sent dsvt end of streamid=%04x\n", ntohs(dsvt.streamid));
+
+			return false;
+		};
+
+		if (expected_length == kVoiceLength)
+		{
+			if (write_voice(itap.voice.frame))
+				return true;
+		}
+		else
+		{
+			for (unsigned int i = 0; i < itap.voice_bt.count; i++)
+			{
+				if (write_voice(itap.voice_bt.frames[i]))
+					return true;
 			}
 		}
 	}
@@ -669,7 +744,7 @@ bool CQnetBT::ReadConfig(const std::string &cfgFile)
 	std::string bt_path("module_");
 	if (0 > m_index)
 	{
-		// we need to find the lone itap module
+		// we need to find the lone bt module
 		for (int i=0; i<3; i++)
 		{
 			std::string test(bt_path);
@@ -686,20 +761,20 @@ bool CQnetBT::ReadConfig(const std::string &cfgFile)
 		}
 		if (0 > m_index)
 		{
-			fprintf(stderr, "Error: no 'itap' module found\n!");
+			fprintf(stderr, "Error: no 'bt' module found\n!");
 			return true;
 		}
 	}
 	else
 	{
-		// make sure itap module is defined
+		// make sure bt module is defined
 		bt_path.append(1, 'a' + m_index);
 		if (cfg.KeyExists(bt_path))
 		{
 			cfg.GetValue(bt_path, estr, type, 1, 16);
 			if (type.compare("bt"))
 			{
-				fprintf(stderr, "%s = %s is not 'itap' type!\n", bt_path.c_str(), type.c_str());
+				fprintf(stderr, "%s = %s is not 'bt' type!\n", bt_path.c_str(), type.c_str());
 				return true;
 			}
 		}

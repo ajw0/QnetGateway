@@ -18,18 +18,14 @@
 
 #pragma once
 
-#include <atomic>
 #include <cstring>
 #include <string>
 #include <queue>
-
-#include <netinet/in.h>
 #include "Random.h"	// for streamid generation
 #include "UnixDgramSocket.h"
 #include "Base.h"
 
 #define CALL_SIZE 8
-#define IP_SIZE 15
 #define BT_BATCH_SIZE 4  // Number of frames per Bluetooth batch
 
 // Reply types from Icom radio
@@ -39,11 +35,11 @@ enum REPLY_TYPE
 	RT_ERROR,        // Read error
 	RT_UNKNOWN,      // Unrecognized packet type
 	RT_HEADER,       // Header packet (type 0x10)
-	RT_DATA,         // Single voice frame (type 0x12) - USB mode
+	RT_DATA_SINGLE,  // Single voice frame (type 0x12)
 	RT_HEADER_ACK,   // Header acknowledgment (type 0x21)
-	RT_DATA_ACK,     // Voice acknowledgment (type 0x23) - USB mode
+	RT_DATA_ACK,     // Voice acknowledgment (type 0x23)
 	RT_PONG,         // Pong response (type 0x03)
-	RT_DATA_BT       // Batched voice frames (type 0x13) - Bluetooth mode
+	RT_DATA_BT       // Batched voice frames (type 0x13)
 };
 
 // Single AMBE voice frame structure
@@ -68,8 +64,9 @@ using SITAP = struct itap_tag
 	//   0x03U - pong
 	//   0x10U - header
 	//   0x11U - header acknowledgment
-	//   0x12U - single voice frame (USB)
-	//   0x13U - batched voice frames (Bluetooth, 4 frames)
+	//   0x12U - single voice frame
+	//   0x13U - batched voice frames (4 frames)
+	//   0x23U - voice acknowledgment
 	// Transmit (to radio):
 	//   0x02U - ping
 	//   0x20U - header
@@ -90,14 +87,14 @@ using SITAP = struct itap_tag
 			unsigned char nm[4];    // Suffix
 		} header;
 
-		// Single voice frame (16 bytes) - USB mode
+		// Single voice frame (16 bytes)
 		struct
 		{
 			unsigned char counter;  // Frame counter (resets with each header)
 			ambe_frame frame;       // Voice frame
 		} voice;
 
-		// Batched voice frames (56 bytes) - Bluetooth mode
+		// Batched voice frames (56 bytes)
 		struct
 		{
 			unsigned char counter;       // Batch counter
@@ -148,7 +145,6 @@ private:
 	// Packet processing
 	bool ProcessGateway(const int len, const unsigned char *raw);
 	bool ProcessBT(const unsigned char *raw);
-	bool ProcessBatchedVoice(const unsigned char *raw, unsigned int len);
 
 	// Serial communication
 	int OpenBT();
@@ -181,4 +177,5 @@ private:
 	// Outgoing packet queue
 	std::queue<CFrame> queue;
 	bool acknowledged;            // ACK status for flow control
+	bool send_error_logged;       // Log send errors once per disconnect
 };
